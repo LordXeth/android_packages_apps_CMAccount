@@ -16,9 +16,6 @@
 
 package com.cyanogenmod.account.ui;
 
-import android.accounts.AccountManagerCallback;
-import android.accounts.AccountManagerFuture;
-import android.util.Log;
 import com.cyanogenmod.account.CMAccount;
 import com.cyanogenmod.account.R;
 import com.cyanogenmod.account.gcm.GCMUtil;
@@ -30,13 +27,14 @@ import com.cyanogenmod.account.setup.SetupDataCallbacks;
 import com.cyanogenmod.account.util.CMAccountUtils;
 
 import android.accounts.AccountManager;
+import android.accounts.AccountManagerCallback;
+import android.accounts.AccountManagerFuture;
 import android.app.Activity;
 import android.app.AlertDialog;
 import android.app.AppGlobals;
 import android.app.Dialog;
 import android.app.Fragment;
 import android.app.FragmentManager;
-import android.app.StatusBarManager;
 import android.content.ComponentName;
 import android.content.Context;
 import android.content.DialogInterface;
@@ -49,9 +47,6 @@ import android.os.Handler;
 import android.provider.Settings;
 import android.support.v13.app.FragmentStatePagerAdapter;
 import android.support.v4.view.ViewPager;
-import android.view.Menu;
-import android.view.MenuInflater;
-import android.view.MenuItem;
 import android.view.View;
 import android.widget.Button;
 
@@ -63,13 +58,15 @@ public class SetupWizardActivity extends Activity implements SetupDataCallbacks 
 
     private static final String GOOGLE_SETUPWIZARD_PACKAGE = "com.google.android.setupwizard";
     private static final String KEY_SIM_MISSING_SHOWN = "sim-missing-shown";
+    private static final String KEY_G_ACCOUNT_SHOWN = "g-account-shown";
 
     private static final int DIALOG_SIM_MISSING = 0;
 
     private ViewPager mViewPager;
     private CMPagerAdapter mPagerAdapter;
 
-    private MenuItem mNextMenuItem;
+    private Button mNextButton;
+    private Button mPrevButton;
 
     private PageList mPageList;
 
@@ -94,6 +91,8 @@ public class SetupWizardActivity extends Activity implements SetupDataCallbacks 
         } else {
             mSharedPreferences.edit().putBoolean(KEY_SIM_MISSING_SHOWN, false).commit();
         }
+        mNextButton = (Button) findViewById(R.id.next_button);
+        mPrevButton = (Button) findViewById(R.id.prev_button);
         mSetupData.registerListener(this);
         mPagerAdapter = new CMPagerAdapter(getFragmentManager());
         mViewPager = (ViewPager) findViewById(R.id.pager);
@@ -105,6 +104,18 @@ public class SetupWizardActivity extends Activity implements SetupDataCallbacks 
                 if (position < mPageList.size()) {
                     onPageLoaded(mPageList.get(position));
                 }
+            }
+        });
+        mNextButton.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View view) {
+                doNext();
+            }
+        });
+        mPrevButton.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View view) {
+                doPrevious();
             }
         });
         onPageTreeChanged();
@@ -124,24 +135,6 @@ public class SetupWizardActivity extends Activity implements SetupDataCallbacks 
     protected void onDestroy() {
         super.onDestroy();
         mSetupData.unregisterListener(this);
-    }
-
-    public boolean onCreateOptionsMenu(Menu menu) {
-        MenuInflater inflater = getMenuInflater();
-        inflater.inflate(R.menu.setup, menu);
-        mNextMenuItem = menu.findItem(R.id.action_next);
-        updateNextPreviousState();
-        return super.onCreateOptionsMenu(menu);
-    }
-
-    @Override
-    public boolean onOptionsItemSelected(MenuItem item) {
-        switch (item.getItemId()) {
-            case R.id.action_next:
-                doNext();
-                break;
-        }
-        return super.onOptionsItemSelected(item);
     }
 
     @Override
@@ -222,22 +215,13 @@ public class SetupWizardActivity extends Activity implements SetupDataCallbacks 
 
     private void updateNextPreviousState() {
         final int position = mViewPager.getCurrentItem();
-        final Page currentPage = mPageList.get(position);
-        final int nextButtonResId = currentPage.getNextButtonResId();
-        // onCreateOptionsMenu happens post create/resume. So this could initially be null;
-        if (mNextMenuItem != null) {
-            if (nextButtonResId != -1) {
-                mNextMenuItem.setEnabled(true);
-                mNextMenuItem.setTitle(nextButtonResId);
-            } else {
-                mNextMenuItem.setEnabled(false);
-                mNextMenuItem.setTitle("");
-            }
-        }
+        mNextButton.setEnabled(position != mPagerAdapter.getCutOffPage());
+        mPrevButton.setVisibility(position <= 0 ? View.INVISIBLE : View.VISIBLE);
     }
 
     @Override
     public void onPageLoaded(Page page) {
+        mNextButton.setText(page.getNextButtonResId());
         if (page.isRequired()) {
             if (recalculateCutOffPage()) {
                 mPagerAdapter.notifyDataSetChanged();
@@ -246,7 +230,12 @@ public class SetupWizardActivity extends Activity implements SetupDataCallbacks 
         if (page.getId() == R.string.setup_cmaccount) {
             doSimCheck();
         } else if (page.getId() == R.string.setup_google_account) {
-            launchGoogleAccountSetup();
+            // Only auto show the google account setup once.
+            boolean shown = mSharedPreferences.getBoolean(KEY_G_ACCOUNT_SHOWN, false);
+            if (!shown) {
+                mSharedPreferences.edit().putBoolean(KEY_G_ACCOUNT_SHOWN, true).commit();
+                launchGoogleAccountSetup();
+            }
         }
         updateNextPreviousState();
     }
@@ -356,6 +345,7 @@ public class SetupWizardActivity extends Activity implements SetupDataCallbacks 
         AccountManager.get(this).addAccount(CMAccount.ACCOUNT_TYPE_GOOGLE, null, null, bundle, this, new AccountManagerCallback<Bundle>() {
             @Override
             public void run(AccountManagerFuture<Bundle> bundleAccountManagerFuture) {
+                if (isDestroyed()) return; //There is a change this activity has been torn down.
                 Page page = mPageList.findPage(R.string.setup_google_account);
                 if (page != null) {
                     onPageFinished(page);
